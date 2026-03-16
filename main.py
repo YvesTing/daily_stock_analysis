@@ -41,13 +41,12 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 from data_provider.base import canonical_stock_code
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.market_review import run_market_review
-
+from src.webui_frontend import prepare_webui_frontend_assets
 from src.config import get_config, Config
 from src.logging_config import setup_logging
 
@@ -267,6 +266,10 @@ def run_full_analysis(
     这是定时任务调用的主函数
     """
     try:
+        # Issue #529: Hot-reload STOCK_LIST from .env on each scheduled run
+        if stock_codes is None:
+            config.refresh_stock_list()
+
         # Issue #373: Trading day filter (per-stock, per-market)
         effective_codes = stock_codes if stock_codes is not None else config.stock_list
         filtered_codes, effective_region, should_skip = _compute_trading_day_filter(
@@ -351,7 +354,10 @@ def run_full_analysis(
             if market_report:
                 parts.append(f"# 📈 大盘复盘\n\n{market_report}")
             if results:
-                dashboard_content = pipeline.notifier.generate_dashboard_report(results)
+                dashboard_content = pipeline.notifier.generate_aggregate_report(
+                    results,
+                    getattr(config, 'report_type', 'simple'),
+                )
                 parts.append(f"# 🚀 个股决策仪表盘\n\n{dashboard_content}")
             if parts:
                 combined_content = "\n\n---\n\n".join(parts)
@@ -393,9 +399,12 @@ def run_full_analysis(
                 if market_report:
                     full_content += f"# 📈 大盘复盘\n\n{market_report}\n\n---\n\n"
 
-                # 添加个股决策仪表盘（使用 NotificationService 生成）
+                # 添加个股决策仪表盘（使用 NotificationService 生成，按 report_type 分支）
                 if results:
-                    dashboard_content = pipeline.notifier.generate_dashboard_report(results)
+                    dashboard_content = pipeline.notifier.generate_aggregate_report(
+                        results,
+                        getattr(config, 'report_type', 'simple'),
+                    )
                     full_content += f"# 🚀 个股决策仪表盘\n\n{dashboard_content}"
 
                 # 3. 创建文档
@@ -459,6 +468,11 @@ def start_api_server(host: str, port: int, config: Config) -> None:
     thread.start()
     logger.info(f"FastAPI 服务已启动: http://{host}:{port}")
 
+
+def _is_truthy_env(var_name: str, default: str = "true") -> bool:
+    """Parse common truthy / falsy environment values."""
+    value = os.getenv(var_name, default).strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 def start_bot_stream_clients(config: Config) -> None:
     """Start bot stream clients when enabled in config."""
@@ -547,6 +561,8 @@ def main() -> int:
 
     bot_clients_started = False
     if start_serve:
+        if not prepare_webui_frontend_assets():
+            logger.warning("前端静态资源未就绪，继续启动 FastAPI 服务（Web 页面可能不可用）")
         try:
             start_api_server(host=args.host, port=args.port, config=config)
             bot_clients_started = True
@@ -560,7 +576,7 @@ def main() -> int:
     if args.serve_only:
         logger.info("模式: 仅 Web 服务")
         logger.info(f"Web 服务运行中: http://{args.host}:{args.port}")
-        logger.info("通过 /api/v1/analysis/stock/{code} 接口触发分析")
+        logger.info("通过 /api/v1/analysis/analyze 接口触发分析")
         logger.info(f"API 文档: http://{args.host}:{args.port}/docs")
         logger.info("按 Ctrl+C 退出...")
         try:
@@ -617,12 +633,14 @@ def main() -> int:
             search_service = None
             analyzer = None
 
-            if config.bocha_api_keys or config.tavily_api_keys or config.brave_api_keys or config.serpapi_keys:
+            if config.bocha_api_keys or config.tavily_api_keys or config.brave_api_keys or config.serpapi_keys or config.minimax_api_keys or config.searxng_base_urls:
                 search_service = SearchService(
                     bocha_keys=config.bocha_api_keys,
                     tavily_keys=config.tavily_api_keys,
                     brave_keys=config.brave_api_keys,
                     serpapi_keys=config.serpapi_keys,
+                    minimax_keys=config.minimax_api_keys,
+                    searxng_base_urls=config.searxng_base_urls,
                     news_max_age_days=config.news_max_age_days,
                 )
 
@@ -654,7 +672,7 @@ def main() -> int:
             should_run_immediately = config.schedule_run_immediately
             if getattr(args, 'no_run_immediately', False):
                 should_run_immediately = False
-            
+
             logger.info(f"启动时立即执行: {should_run_immediately}")
 
             from src.scheduler import run_with_schedule
