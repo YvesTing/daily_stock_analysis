@@ -37,7 +37,13 @@ export interface PortfolioPositionItem {
   lastPrice: number;
   marketValueBase: number;
   unrealizedPnlBase: number;
+  unrealizedPnlPct?: number | null;
   valuationCurrency: string;
+  priceSource?: 'realtime_quote' | 'history_close' | 'missing' | string;
+  priceProvider?: string | null;
+  priceDate?: string | null;
+  priceStale?: boolean;
+  priceAvailable?: boolean;
 }
 
 export interface PortfolioAccountSnapshot {
@@ -178,6 +184,10 @@ export interface PortfolioEventCreatedResponse {
   id: number;
 }
 
+export interface PortfolioDeleteResponse {
+  deleted: number;
+}
+
 export interface PortfolioTradeListItem {
   id: number;
   accountId: number;
@@ -281,4 +291,15 @@ export interface PortfolioImportBrokerItem {
 
 export interface PortfolioImportBrokerListResponse {
   brokers: PortfolioImportBrokerItem[];
+}
+
+export interface PortfolioFxRefreshResponse {
+  asOf: string;
+  accountCount: number;
+  refreshEnabled?: boolean;
+  disabledReason?: string | null;
+  pairCount: number;
+  updatedCount: number;
+  staleCount: number;
+  errorCount: number;
 }
